@@ -51,7 +51,8 @@ enum Fetch {
               let o = json(d), let limits = o["limits"] as? [String: Any] else { return nil }
         func win(_ k: String, _ label: String, _ short: String) -> Window? {
             guard let w = limits[k] as? [String: Any], let p = percent(w["percent"]) else { return nil }
-            return Window(label: label, short: short, used: p, resetsAt: date(w["resets_at"]))
+            return Window(label: label, short: short, used: p, resetsAt: date(w["resets_at"]),
+                          durationMinutes: short == "5h" ? 300 : 10_080)
         }
         let five = win("five_hour", "5-hour", "5h"), week = win("seven_day", "Week", "w")
         guard five != nil || week != nil else { return nil }
@@ -85,7 +86,8 @@ enum Fetch {
             if let r2 = Range(m.range(at: 2), in: text), let r3 = Range(m.range(at: 3), in: text) {
                 reset = parseClaudeReset(String(text[r2]), tz: String(text[r3]))
             }
-            return Window(label: label, short: short, used: used, resetsAt: reset)
+            return Window(label: label, short: short, used: used, resetsAt: reset,
+                          durationMinutes: short == "5h" ? 300 : 10_080)
         }
         let five = line("Current session", "5-hour", "5h")
         let week = line("Current week (all models)", "Week", "w")
@@ -149,9 +151,11 @@ enum Fetch {
             let name = g["name"] as? String ?? "Models"
             for bucket in g["buckets"] as? [[String: Any]] ?? [] {
                 guard let rf = bucket["remaining_fraction"] as? Double, rf.isFinite, rf >= 0, rf <= 1 else { continue }
-                let five = (bucket["window"] as? String) == "5h"
+                let kind = bucket["window"] as? String ?? ""
+                let five = kind == "5h"
+                let duration = five ? 300 : (["7d", "w", "week", "weekly"].contains(kind) ? 10_080 : nil)
                 let w = Window(label: name, short: five ? "5h" : "w",
-                               used: (1 - rf) * 100, resetsAt: date(bucket["reset_time"]))
+                               used: (1 - rf) * 100, resetsAt: date(bucket["reset_time"]), durationMinutes: duration)
                 if name.localizedCaseInsensitiveContains("Gemini") { gemini.append(w) } else if rf < 1 { other.append(w) }
             }
         }
@@ -217,7 +221,8 @@ enum Fetch {
         func win(_ k: String) -> Window? {
             guard let w = rl[k] as? [String: Any], let u = percent(w[used]) else { return nil }
             let mins = (w["window_minutes"] ?? w["windowDurationMins"]) as? Int ?? 0
-            return Window(label: mins <= 300 ? "5-hour" : "Week", short: mins <= 300 ? "5h" : "w", used: u, resetsAt: date(w[reset]))
+            return Window(label: mins <= 300 ? "5-hour" : "Week", short: mins <= 300 ? "5h" : "w",
+                          used: u, resetsAt: date(w[reset]), durationMinutes: mins > 0 ? mins : nil)
         }
         let five = win("primary"), week = win("secondary")
         let plan = ((rl["plan_type"] ?? rl["planType"]) as? String).map { "ChatGPT " + $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""
@@ -243,7 +248,8 @@ enum Fetch {
             let weekly = (period?["type"] as? String)?.contains("WEEKLY") ?? true
             // creditUsagePercent is a 0–100 percentage (1.0 = 1 %).
             let w = Window(label: weekly ? "Weekly credits" : "Credits", short: weekly ? "w" : "",
-                           used: percent(c["creditUsagePercent"]), resetsAt: date(period?["end"] ?? c["billingPeriodEnd"]))
+                           used: percent(c["creditUsagePercent"]), resetsAt: date(period?["end"] ?? c["billingPeriodEnd"]),
+                           durationMinutes: (period?["type"] as? String)?.contains("WEEKLY") == true ? 10_080 : nil)
             return Snapshot(vendor: .grok, plan: (r["subscription_tier"] as? String) ?? "", bar: w, windows: [w],
                             measuredAt: Date())
         }

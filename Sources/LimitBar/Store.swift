@@ -12,6 +12,24 @@ import Foundation
 final class Store: ObservableObject {
     @Published private(set) var snaps: [Vendor: Snapshot] = [:]
     @Published private(set) var busy: Set<Vendor> = []
+    @Published private(set) var hiddenVendors: Set<Vendor> = []
+
+    private let preferences: UserDefaults?
+    private let isPreview: Bool
+    private static let hiddenKey = "hiddenProviders"
+
+    var enabled: [Vendor] { Vendor.allCases.filter { !hiddenVendors.contains($0) } }
+    var visibleBusy: Bool { busy.contains { !hiddenVendors.contains($0) } }
+
+    func setEnabled(_ vendor: Vendor, _ enabled: Bool) {
+        let currentlyEnabled = !hiddenVendors.contains(vendor)
+        guard currentlyEnabled != enabled else { return }
+        if enabled { hiddenVendors.remove(vendor) } else { hiddenVendors.insert(vendor) }
+        preferences?.set(hiddenVendors.map(\.rawValue).sorted(), forKey: Self.hiddenKey)
+        if enabled, !isPreview, !asleep, shouldPoll(vendor, force: true, olderThan: nil) {
+            schedule(vendor, force: true)
+        }
+    }
 
     private let queue = DispatchQueue(label: "limitbar.fetch", qos: .utility)
     private var timer: Timer?
@@ -35,13 +53,21 @@ final class Store: ObservableObject {
 
     /// Vendors the menu bar shows: everything whose CLI exists. Missing ones are listed in the panel only.
     var installed: [Vendor] {
-        Vendor.allCases.filter { v in
+        enabled.filter { v in
             guard let s = snaps[v] else { return true }
             return s.state != .missing
         }
     }
 
-    init() {
+    init(previewSnapshots: [Vendor: Snapshot]? = nil, preferences: UserDefaults? = .standard) {
+        self.preferences = preferences
+        self.isPreview = previewSnapshots != nil
+        hiddenVendors = Set((preferences?.stringArray(forKey: Self.hiddenKey) ?? []).compactMap(Vendor.init(rawValue:)))
+        // A preview must never poll CLIs, read accounts, or change the user's cache.
+        if let snapshots = previewSnapshots {
+            snaps = snapshots
+            return
+        }
         loadCache()
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.asleep = true }
@@ -55,13 +81,14 @@ final class Store: ObservableObject {
 
     /// Called by the timer (every 30 s, cheap checks only), on wake, on hover and from the panel.
     func refresh(force: Bool = false, olderThan: TimeInterval? = nil) {
-        guard !asleep else { return }
-        for v in Vendor.allCases where shouldPoll(v, force: force, olderThan: olderThan) {
+        guard !asleep, !isPreview else { return }
+        for v in enabled where shouldPoll(v, force: force, olderThan: olderThan) {
             schedule(v, force: force)
         }
     }
 
-    private func shouldPoll(_ v: Vendor, force: Bool, olderThan: TimeInterval?) -> Bool {
+    func shouldPoll(_ v: Vendor, force: Bool, olderThan: TimeInterval?) -> Bool {
+        guard !hiddenVendors.contains(v) else { return false }
         if busy.contains(v) { return false }
         let last = lastPoll[v] ?? .distantPast
         let age = Date().timeIntervalSince(last)

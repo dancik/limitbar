@@ -31,9 +31,44 @@ struct Window: Codable, Equatable {
     var short: String            // "5h" or "w" — the menu bar adds a superscript w for weekly windows
     var used: Double?
     var resetsAt: Date?
+    /// Only confirmed window lengths get pacing. Optional so older caches still decode.
+    var durationMinutes: Int? = nil
+
+    /// Even spending across a fixed reset window, not a prediction of future activity.
+    func pacing(at now: Date = Date()) -> Pacing? {
+        guard let minutes = durationMinutes, minutes == 300 || minutes == 10_080,
+              let used = used, used.isFinite, (0...100).contains(used),
+              let reset = resetsAt else { return nil }
+        let duration = Double(minutes) * 60
+        let remaining = reset.timeIntervalSince(now)
+        guard remaining.isFinite, remaining > 0, remaining <= duration else { return nil }
+        return Pacing(elapsedFraction: 1 - remaining / duration, used: used, remaining: remaining)
+    }
 
     /// The reset time has passed since we read it: the old percent is obsolete, not "0 %".
     var resetPassed: Bool { (resetsAt.map { $0 < Date() }) ?? false }
+}
+
+struct Pacing {
+    let elapsedFraction: Double
+    let used: Double
+    let remaining: TimeInterval
+
+    /// Percentage points of allowance used above/below the elapsed share of the window.
+    var difference: Double { used - elapsedFraction * 100 }
+    var roundedDifference: Int { Int(difference.rounded()) }
+    var isOverPace: Bool { roundedDifference > 0 }
+    var summary: String {
+        let delta = roundedDifference
+        if delta == 0 { return "On pace" }
+        return "\(abs(delta)) pp \(delta > 0 ? "over" : "under") pace"
+    }
+    var remainingText: String {
+        let minutes = Int(ceil(remaining / 60))
+        if minutes >= 1440 { return "\(minutes / 1440)d \((minutes % 1440) / 60)h left" }
+        if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m left" }
+        return "\(minutes)m left"
+    }
 }
 
 struct Snapshot: Codable, Equatable {

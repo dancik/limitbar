@@ -42,6 +42,9 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         store.$busy.receive(on: RunLoop.main).sink { [weak self] _ in
             DispatchQueue.main.async { self?.resizePanel() }
         }.store(in: &subs)
+        store.$hiddenVendors.receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.resizeItem(); self?.resizePanel() }
+        }.store(in: &subs)
         buildPanel()
     }
 
@@ -75,7 +78,9 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         fx.layer?.borderWidth = 0.5
         fx.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
 
-        panelHost = NSHostingView(rootView: AnyView(PanelView(store: store, onQuit: { NSApp.terminate(nil) })))
+        panelHost = NSHostingView(rootView: AnyView(PanelView(store: store, onQuit: { NSApp.terminate(nil) }, onResize: { [weak self] in
+            DispatchQueue.main.async { self?.resizePanel() }
+        })))
         panelHost.translatesAutoresizingMaskIntoConstraints = false
         fx.addSubview(panelHost)
         NSLayoutConstraint.activate([panelHost.leadingAnchor.constraint(equalTo: fx.leadingAnchor),

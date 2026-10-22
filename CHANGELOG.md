@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Choose visible services in the panel's Providers section. Save selections between launches,
+  skip future polls for hidden providers and keep the menu item accessible when all are off.
+- Show pacing for confirmed 5-hour and 7-day limits: a segmented time bar under each usage bar,
+  time until reset, and hover details comparing usage with an even allowance across the window.
+- Add pacing tests and a `--preview-panel <directory>` command that renders the native panel
+  in light and dark mode using sample data without reading accounts or polling CLIs.
+
 ## 1.0.3
 
 - **App icon.** LimitBar now has its own icon in Finder, Spotlight and Launchpad (it had the generic one).

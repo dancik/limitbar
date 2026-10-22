@@ -3,6 +3,19 @@ import Foundation
 
 let args = CommandLine.arguments
 
+if let index = args.firstIndex(of: "--preview-panel"), args.indices.contains(index + 1) {
+    _ = NSApplication.shared
+    do {
+        try MainActor.assumeIsolated {
+            try PanelPreview.render(to: URL(fileURLWithPath: args[index + 1], isDirectory: true))
+        }
+    } catch {
+        fputs("Could not render panel: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+    exit(0)
+}
+
 // `LimitBar --probe` asks every CLI once and prints what limitbar would show, as JSON:
 // state (ok / missing / untrusted / signedOut / failed), plan, windows. Nothing else of the account.
 if args.contains("--probe") {

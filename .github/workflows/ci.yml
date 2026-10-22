@@ -29,6 +29,7 @@ jobs:
         with:
           persist-credentials: false
       - run: bash -n install.sh
+      - run: swift test
       - run: scripts/build-app.sh build --universal
       - run: tests/states.sh build/LimitBar.app
       - run: tests/sandbox.sh
