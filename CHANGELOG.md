@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - **Usage view.** A **Limits | Usage** switch at the top of the panel. Usage shows, per service, the
   tokens and model calls of today or the last 7 days, a bar per day, and a line per model. Counted from
