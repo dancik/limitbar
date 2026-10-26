@@ -11,11 +11,14 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
     private var panel: NSPanel!
     private var panelHost: NSHostingView<AnyView>!
     private let store = Store()
+    private let usage = UsageStore()
+    private let ui = PanelState()
     private var subs = Set<AnyCancellable>()
     private var pinned = false
     private var showTimer: Timer?
     private var hideTimer: Timer?
     private var outsideClick: Any?
+    private var usageTimer: Timer?
     private var overItem = false
     private var overPanel = false
 
@@ -41,6 +44,20 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         }.store(in: &subs)
         store.$busy.receive(on: RunLoop.main).sink { [weak self] _ in
             DispatchQueue.main.async { self?.resizePanel() }
+        }.store(in: &subs)
+        // The Usage page changes the panel's height: on every switch and whenever new totals arrive. Each
+        // change measures the natural height again (scrolling off) before deciding whether it must scroll.
+        Publishers.MergeMany(ui.$page.map { _ in () }.eraseToAnyPublisher(), ui.$range.map { _ in () }.eraseToAnyPublisher(),
+                             usage.$summary.map { _ in () }.eraseToAnyPublisher(), usage.$reading.map { _ in () }.eraseToAnyPublisher())
+            .receive(on: RunLoop.main).sink { [weak self] _ in
+                DispatchQueue.main.async { self?.ui.scrolls = false; DispatchQueue.main.async { self?.resizePanel() } }
+            }.store(in: &subs)
+        ui.$scrolls.dropFirst().filter { $0 }.receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.resizePanel() }
+        }.store(in: &subs)
+        ui.$page.sink { [weak self] page in
+            guard let self = self, self.panel?.isVisible == true else { return }
+            if page == .usage { self.usage.refresh() } else { self.usage.pause() }
         }.store(in: &subs)
         buildPanel()
     }
@@ -75,7 +92,7 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         fx.layer?.borderWidth = 0.5
         fx.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
 
-        panelHost = NSHostingView(rootView: AnyView(PanelView(store: store, onQuit: { NSApp.terminate(nil) })))
+        panelHost = NSHostingView(rootView: AnyView(PanelView(store: store, usage: usage, ui: ui, onQuit: { NSApp.terminate(nil) })))
         panelHost.translatesAutoresizingMaskIntoConstraints = false
         fx.addSubview(panelHost)
         NSLayoutConstraint.activate([panelHost.leadingAnchor.constraint(equalTo: fx.leadingAnchor),
@@ -94,15 +111,27 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         guard size.height > 0, let button = item.button, let win = button.window else { return }
         let r = win.convertToScreen(button.convert(button.bounds, to: nil))
         guard let screen = (win.screen ?? NSScreen.main)?.visibleFrame else { return }   // no display attached
+        // Taller than the screen (many models on Usage): the middle scrolls instead. The natural height is
+        // measured without scrolling; the flag change re-renders and calls this again.
+        let room = screen.height - 16
+        if ui.maxHeight != room { ui.maxHeight = room }
+        if !ui.scrolls, size.height > room { ui.scrolls = true; return }
+        let height = min(size.height, room)
         var x = r.midX - size.width / 2
         x = min(max(x, screen.minX + 8), screen.maxX - size.width - 8)
-        let y = r.minY - size.height - 5
-        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: panel.isVisible)
+        let y = max(r.minY - height - 5, screen.minY + 4)
+        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: height), display: panel.isVisible)
     }
 
     private func show() {
         guard !panel.isVisible else { return }
         store.refresh(olderThan: 90)      // hover refresh: only sources older than 90 s
+        if ui.page == .usage { usage.refresh() }   // logs are read only for someone looking at them
+        usageTimer?.invalidate()
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self = self, self.panel.isVisible, self.ui.page == .usage else { return }
+            self.usage.refresh()
+        }
         resizePanel()
         panel.orderFrontRegardless()
         item.button?.highlight(true)
@@ -112,6 +141,8 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         guard !pinned else { return }
         panel.orderOut(nil)
         item.button?.highlight(false)
+        usageTimer?.invalidate(); usageTimer = nil
+        usage.pause()
         if let m = outsideClick { NSEvent.removeMonitor(m); outsideClick = nil }
     }
 

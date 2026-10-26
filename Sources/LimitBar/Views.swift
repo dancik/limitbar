@@ -19,6 +19,8 @@ enum Marks {
 
 extension Color {
     static let claude = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+    static let codex = Color(red: 0x45 / 255, green: 0xA8 / 255, blue: 0x82 / 255)
+    static let grokBar = Color(red: 0xEB / 255, green: 0xEB / 255, blue: 0xF0 / 255)
     static let hot = Color(nsColor: .systemRed)
     static let geminiGradient = LinearGradient(colors: [Color(red: 0x3D / 255, green: 0x8B / 255, blue: 1),
                                                        Color(red: 0xB0 / 255, green: 0x6B / 255, blue: 0xDB / 255)],
@@ -72,24 +74,46 @@ struct TrayView: View {
     }
 }
 
-// MARK: - Panel: 328 pt glass, one section per vendor, bars in brand colours
+// MARK: - Panel: 328 pt glass, Limits | Usage, one section per vendor, bars in brand colours
+
+/// Which page and range the panel shows; remembered across launches.
+final class PanelState: ObservableObject {
+    enum Page: String { case limits, usage }
+    enum Range: String { case today, week }
+
+    @Published var page: Page { didSet { UserDefaults.standard.set(page.rawValue, forKey: "panelPage") } }
+    @Published var range: Range { didSet { UserDefaults.standard.set(range.rawValue, forKey: "usageRange") } }
+    /// The tallest the panel may be on this screen, and whether its content needs to scroll to fit;
+    /// both set by the app delegate.
+    @Published var maxHeight: CGFloat = .greatestFiniteMagnitude
+    @Published var scrolls = false
+
+    init() {
+        page = Page(rawValue: UserDefaults.standard.string(forKey: "panelPage") ?? "") ?? .limits
+        range = Range(rawValue: UserDefaults.standard.string(forKey: "usageRange") ?? "") ?? .week
+    }
+}
 
 struct PanelView: View {
     @ObservedObject var store: Store
+    @ObservedObject var usage: UsageStore
+    @ObservedObject var ui: PanelState
     var onQuit: () -> Void
     @State private var login = SMAppService.mainApp.status == .enabled
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { _ in
             VStack(spacing: 0) {
-                ForEach(Array(store.installed.enumerated()), id: \.element) { i, v in
-                    if i > 0 { Hairline() }
-                    VendorSection(vendor: v, snap: store.snaps[v], busy: store.busy.contains(v))
-                }
-                let missing = Vendor.allCases.filter { !store.installed.contains($0) }
-                if !missing.isEmpty {
-                    if !store.installed.isEmpty { Hairline() }
-                    MissingRow(vendors: missing)
+                Segmented(items: [(PanelState.Page.limits, "Limits", "gauge.medium"),
+                                  (PanelState.Page.usage, "Usage", "chart.bar.fill")],
+                          selection: $ui.page, height: 22, font: 12)
+                    .padding(EdgeInsets(top: 8, leading: 10, bottom: ui.page == .limits ? 8 : 0, trailing: 10))
+                // The switch and the footer stay put; only the middle scrolls, and only on a screen too short
+                // for it (many models on Usage).
+                if ui.scrolls {
+                    ScrollView(.vertical) { middle }.frame(height: max(120, ui.maxHeight - 80))
+                } else {
+                    middle
                 }
                 Hairline()
                 footer
@@ -98,10 +122,34 @@ struct PanelView: View {
         }
     }
 
+    private var middle: some View {
+        VStack(spacing: 0) {
+            if ui.page == .usage { UsagePage(store: store, usage: usage, ui: ui) } else { limits }
+        }
+    }
+
+    @ViewBuilder private var limits: some View {
+        Hairline()
+        ForEach(Array(store.installed.enumerated()), id: \.element) { i, v in
+            if i > 0 { Hairline() }
+            VendorSection(vendor: v, snap: store.snaps[v], busy: store.busy.contains(v))
+        }
+        let missing = Vendor.allCases.filter { !store.installed.contains($0) }
+        if !missing.isEmpty {
+            if !store.installed.isEmpty { Hairline() }
+            MissingRow(vendors: missing)
+        }
+    }
+
     private var footer: some View {
         HStack(spacing: 6) {
-            FooterButton(title: store.busy.isEmpty ? "Refresh" : "Refreshing…") { store.refresh(force: true) }
-                .disabled(!store.busy.isEmpty)
+            if ui.page == .usage {
+                FooterButton(title: usage.reading ? "Refreshing…" : "Refresh") { usage.refresh(force: true) }
+                    .disabled(usage.reading)
+            } else {
+                FooterButton(title: store.busy.isEmpty ? "Refresh" : "Refreshing…") { store.refresh(force: true) }
+                    .disabled(!store.busy.isEmpty)
+            }
             Spacer()
             HStack(spacing: 6) {
                 Text("Launch at Login").font(.system(size: 12))
@@ -116,6 +164,207 @@ struct PanelView: View {
             FooterButton(title: "Quit", action: onQuit)
         }
         .padding(EdgeInsets(top: 6, leading: 8, bottom: 8, trailing: 8))
+    }
+}
+
+/// A small segmented control drawn like the macOS one, so it sits right on the popover glass.
+private struct Segmented<T: Hashable>: View {
+    let items: [(T, String, String?)]
+    @Binding var selection: T
+    let height: CGFloat
+    let font: CGFloat
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items, id: \.0) { value, title, symbol in
+                let on = value == selection
+                Button { selection = value } label: {
+                    HStack(spacing: 4) {
+                        if let s = symbol { Image(systemName: s).font(.system(size: font - 2, weight: .semibold)) }
+                        Text(title).font(.system(size: font, weight: .medium))
+                    }
+                    .foregroundStyle(on ? Color.primary : Color.secondary)
+                    .frame(maxWidth: symbol == nil ? nil : .infinity)
+                    .padding(.horizontal, symbol == nil ? 8 : 0)
+                    .frame(height: height)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(on ? 0.14 : 0))
+                        .shadow(color: .black.opacity(on ? 0.3 : 0), radius: 0.5, y: 0.5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.06)))
+    }
+}
+
+// MARK: - Usage page: tokens per vendor and model, today or the last 7 days
+
+private struct UsagePage: View {
+    @ObservedObject var store: Store
+    @ObservedObject var usage: UsageStore
+    @ObservedObject var ui: PanelState
+
+    var body: some View {
+        let window = UsageDays.window(), days = window.map(\.key)
+        let shown = ui.range == .week ? days : [days.last!]
+        VStack(spacing: 0) {
+            HStack {
+                Text(usage.summary == nil && usage.reading ? "Reading logs…" : rangeText(window))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Segmented(items: [(PanelState.Range.today, "Today", nil), (PanelState.Range.week, "7 days", nil)],
+                          selection: $ui.range, height: 18, font: 11)
+            }
+            .padding(EdgeInsets(top: 7, leading: 12, bottom: 5, trailing: 12))
+            ForEach(store.installed, id: \.self) { v in
+                Hairline()
+                UsageSection(vendor: v, plan: store.snaps[v]?.plan ?? "", usage: usage.summary?.vendors[v],
+                             window: window, shown: shown, week: ui.range == .week, reading: usage.reading)
+            }
+            if store.installed.isEmpty {
+                Hairline()
+                Text("No AI coding CLI installed").font(.system(size: 12)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+            }
+        }
+    }
+
+    private func rangeText(_ window: [UsageDay]) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        if ui.range == .today { return "Today · " + f.string(from: window.last!.date) }
+        return f.string(from: window[0].date) + " – today"
+    }
+}
+
+private struct UsageSection: View {
+    let vendor: Vendor
+    let plan: String
+    let usage: VendorUsage?
+    let window: [UsageDay]
+    let shown: [String]
+    let week: Bool
+    let reading: Bool
+
+    var body: some View {
+        let total = usage?.total(shown) ?? ModelTotal()
+        let models = usage?.models(shown) ?? []
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 8) {
+                VendorMark(vendor: vendor).frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(vendor.name).font(.system(size: 13, weight: .semibold)).tracking(-0.2)
+                    Text(plan.isEmpty ? vendor.product : "\(vendor.product) · \(plan)")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if usage?.reported == false {
+                    Text("—").font(.system(size: 16, weight: .semibold)).foregroundStyle(.tertiary)
+                } else if let u = usage {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(compactTokens(total.tokens)).font(.system(size: 16, weight: .semibold).monospacedDigit())
+                            .tracking(-0.4)
+                        Text("\(total.calls.formatted()) call\(total.calls == 1 ? "" : "s")")
+                            .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    .opacity(u.buckets.isEmpty && reading ? 0.5 : 1)
+                }
+            }
+            if usage?.reported == false {
+                Text("Tokens not reported by \(vendor.cli) — it keeps no readable usage log")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 7)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if usage != nil {
+                if week { DayBars(values: window.map { usage!.tokens(on: $0.key) }, days: window, vendor: vendor).padding(.top, 8) }
+                ForEach(models, id: \.model) { m in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(m.model).font(.system(size: 11)).foregroundStyle(Color.primary.opacity(0.78))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 6)
+                        Text(compactTokens(m.total.tokens)).font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        Text(m.total.calls.formatted()).font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
+                            .frame(width: 52, alignment: .trailing)
+                    }
+                    .padding(.top, 5)
+                }
+                if models.isEmpty {
+                    Text(week ? "Not used in the last 7 days" : "Not used today")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, week ? 5 : 7)
+                }
+            }
+        }
+        .padding(EdgeInsets(top: 8, leading: 12, bottom: 9, trailing: 12))
+    }
+}
+
+/// Seven columns, oldest first; the last one is today. Days without use show a thin stub.
+private struct DayBars: View {
+    let values: [Int]
+    let days: [UsageDay]
+    let vendor: Vendor
+    private let height: CGFloat = 32
+
+    var body: some View {
+        let top = max(values.max() ?? 0, 1)
+        VStack(spacing: 3) {
+            HStack(alignment: .bottom, spacing: 5) {
+                ForEach(Array(values.enumerated()), id: \.offset) { i, v in
+                    Group {
+                        if v > 0 {
+                            UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2).fill(fill)
+                                .frame(height: max(2, height * CGFloat(v) / CGFloat(top)))
+                        } else {
+                            Color.clear.frame(height: 0)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .help("\(compactTokens(v)) tokens")
+                }
+            }
+            .frame(height: height, alignment: .bottom)
+            HStack(spacing: 5) {
+                ForEach(Array(days.enumerated()), id: \.offset) { i, d in
+                    Text(i == days.count - 1 ? "today" : weekday(d.date))
+                        .font(.system(size: 8))
+                        .foregroundStyle(i == days.count - 1 ? Color.primary.opacity(0.8) : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    private var fill: AnyShapeStyle {
+        switch vendor {
+        case .claude: AnyShapeStyle(Color.claude)
+        case .gemini: AnyShapeStyle(LinearGradient(colors: [Color(red: 0x6A / 255, green: 0xA8 / 255, blue: 1),
+                                                            Color(red: 0xB0 / 255, green: 0x6B / 255, blue: 0xDB / 255)],
+                                                   startPoint: .top, endPoint: .bottom))
+        case .codex: AnyShapeStyle(Color.codex)
+        case .grok: AnyShapeStyle(Color.grokBar)
+        }
+    }
+
+    private func weekday(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEE"
+        return f.string(from: d)
+    }
+}
+
+/// The vendor's mark in its colours: Claude orange, Gemini's gradient, Codex and Grok in the text colour.
+private struct VendorMark: View {
+    let vendor: Vendor
+    var body: some View {
+        let img = Image(nsImage: Marks.image(vendor)).renderingMode(.template).resizable().interpolation(.high)
+            .frame(width: 16, height: 16)
+        switch vendor {
+        case .claude: img.foregroundStyle(Color.claude)
+        case .gemini: img.foregroundStyle(Color.geminiGradient)
+        default: img.foregroundStyle(Color.primary)
+        }
     }
 }
 
@@ -145,7 +394,7 @@ private struct VendorSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 8) {
-                markView.frame(width: 18, height: 18)
+                VendorMark(vendor: vendor).frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(vendor.name).font(.system(size: 13, weight: .semibold)).tracking(-0.2)
                     Text(planLine).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -174,16 +423,6 @@ private struct VendorSection: View {
             }
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 9, trailing: 12))
-    }
-
-    @ViewBuilder private var markView: some View {
-        let img = Image(nsImage: Marks.image(vendor)).renderingMode(.template).resizable().interpolation(.high)
-            .frame(width: 16, height: 16)
-        switch vendor {
-        case .claude: img.foregroundStyle(Color.claude)
-        case .gemini: img.foregroundStyle(Color.geminiGradient)
-        default: img.foregroundStyle(Color.primary)
-        }
     }
 
     private var planLine: String {

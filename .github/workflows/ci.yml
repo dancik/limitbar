@@ -32,6 +32,7 @@ jobs:
       - run: scripts/build-app.sh build --universal
       - run: tests/states.sh build/LimitBar.app
       - run: tests/sandbox.sh
+      - run: tests/usage.sh build/LimitBar.app
       - name: fresh machine — no AI CLI installed, all four must read "missing"
         run: |
           build/LimitBar.app/Contents/MacOS/LimitBar --probe | tee probe.json

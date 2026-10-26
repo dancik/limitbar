@@ -41,8 +41,10 @@ final class Store: ObservableObject {
         }
     }
 
-    init() {
+    /// `live: false` only loads the cached readings: no CLI runs, no timers (debug panel renders).
+    init(live: Bool = true) {
         loadCache()
+        guard live else { return }
         let ws = NSWorkspace.shared.notificationCenter
         ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.asleep = true }
         ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in

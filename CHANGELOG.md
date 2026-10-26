@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Usage view.** A **Limits | Usage** switch at the top of the panel. Usage shows, per service, the
+  tokens and model calls of today or the last 7 days, a bar per day, and a line per model. Counted from
+  the CLIs' own local records (Claude Code, Codex, Grok Build, Antigravity). They are read only while you
+  look at Usage, incrementally. Nothing of a conversation is kept; the README lists exactly which files
+  are read and what the index stores.
+- `LimitBar --usage` prints the same numbers as JSON.
+
 ## 1.0.3
 
 - **App icon.** LimitBar now has its own icon in Finder, Spotlight and Launchpad (it had the generic one).

@@ -11,6 +11,8 @@ they reset.
 - **Never touches your credentials.** LimitBar asks the official CLIs you already use. It never reads,
   stores or sends a token, cookie or password — sign-in stays inside each CLI.
 - **Only what you have.** CLIs you don't have installed stay out of the menu bar.
+- **Where the tokens went.** Switch the panel to **Usage** for tokens and calls per model, today or over
+  the last 7 days, with a bar per day — counted from the CLIs' own logs on your Mac.
 
 ## Install
 
@@ -73,6 +75,26 @@ Installed somewhere else? Point LimitBar at it:
 Hover (or click to pin) for every window, reset times, plan, and anything that needs attention —
 "Signed out — run `codex login`", for example.
 
+## Usage: tokens per model
+
+The **Limits | Usage** switch at the top of the panel turns it into a token count: per service the total
+tokens and model calls, a bar per day (with **7 days**), and one line per model. Tokens are everything the
+model processed — input, cached input and output — so a long Claude session with a big cached context
+shows billions; that is normal.
+
+| Service | Counted from | Notes |
+|---|---|---|
+| Claude | `~/.claude/projects/**/*.jsonl` | every reply Claude Code saved, interactive or `claude -p`; a reply is counted once, at its final size |
+| Codex | `~/.codex/sessions/**/*.jsonl` | the running token total Codex writes after every model call |
+| Grok | `~/.grok/sessions/*/*/usage.json` | per-turn totals per model, written by Grok Build itself |
+| Gemini | `~/.gemini/antigravity-cli/conversations/*.db` | one database per conversation, opened read-only; each model step records its time and token counts. A conversation agy is still writing is counted once it is done |
+
+The logs are read only while the panel shows Usage — when it opens, then every 30 seconds while it stays
+open, never more than once a minute unless you press Refresh. Claude and Codex logs are read only from
+where the last read stopped; Grok's `usage.json` and Antigravity's databases are small and read whole
+when they change. Closing the panel stops a read in progress. The first read of a busy week can take a
+few seconds.
+
 ## Optional: free Claude readings from the status line
 
 By default LimitBar runs `claude -p /usage` at most once every 20 minutes (no model call, ~3 s of CPU).
@@ -89,7 +111,7 @@ times to `~/Library/Caches/limitbar/claude-status.json`. LimitBar never edits yo
 
 ## Security and privacy
 
-LimitBar runs these commands, and nothing else:
+For the limits, LimitBar runs these commands, and nothing else:
 
 | Service | Command | Notes |
 |---|---|---|
@@ -98,6 +120,16 @@ LimitBar runs these commands, and nothing else:
 | Codex | reads `rate_limits` lines from `~/.codex/sessions/<today>/*.jsonl`; `codex app-server` → `account/rateLimits/read`; `codex login status` | in the sandbox below |
 | Gemini | `agy -p /quota --output-format json` | no model call; in the sandbox below |
 | Grok | `grok agent stdio` → `_x.ai/billing` | in the sandbox below |
+
+For the Usage view, LimitBar itself reads (never writes) the log files listed in
+[Usage](#usage-tokens-per-model) — nothing else in those folders. These logs hold your conversations. Only
+records that carry token counts are looked at: a Claude reply's structure is walked without decoding its
+text, Codex's `turn_context`/`token_count` lines and Grok's `usage.json` are parsed in memory, and of
+Antigravity's databases only each step's metadata is read, never its content. Nothing of a conversation
+is stored, shown or sent: what is shown is model names, days and numbers, and what is stored is listed
+under "What it stores" below. No CLI is run for it.
+Every file is treated as untrusted: links inside those folders are not followed, counts and model names
+are bounded, and Antigravity's databases are opened read-only and immutable, with a time limit.
 
 **The sandbox.** `codex`, `agy` and `grok` run inside the macOS kernel sandbox profile
 [`Resources/cli.sb`](Resources/cli.sb): each CLI can start no program outside its own install folder — so
@@ -117,12 +149,15 @@ How it protects you:
   and not writable by group or others. Anything else shows as "not run" in the panel.
 - **Private working directory.** CLIs run in an empty folder of LimitBar's own, never in a project.
 - **Hard limits.** One CLI at a time, 20–40 s deadline, the whole process group killed afterwards.
-- **What it stores.** `~/Library/Caches/limitbar/state.json` (percentages, reset times, plan names;
-  folder `0700`, files `0600`). No analytics, no network requests of its own.
+- **What it stores.** `~/Library/Caches/limitbar/state.json` (percentages, reset times, plan names) and
+  `usage.json`: per log file a hashed key (not its name), its size, modification time and file identity,
+  the read offset and token counts per model and day; for Claude, the week's replies under hashed ids so
+  each counts once; for Codex, the current model and the session's running total; and the name of your
+  time zone (days are local; another zone means counting again). Folder `0700`, files `0600`. No analytics, no network requests of its own.
 - **Tested.** [`tests/claude-canary.sh`](tests/claude-canary.sh) proves canary hooks and MCP servers
   fire *without* the flags above and stay silent *with* them; [`tests/sandbox.sh`](tests/sandbox.sh)
   proves the sandbox; [`tests/states.sh`](tests/states.sh) covers missing, signed-out and
-  unsafe CLIs. CI runs them plus [gitleaks](https://github.com/gitleaks/gitleaks) on every push.
+  unsafe CLIs; [`tests/usage.sh`](tests/usage.sh) checks the token counts against fake logs. CI runs them plus [gitleaks](https://github.com/gitleaks/gitleaks) on every push.
 - **Release builds** are made by [`.github/workflows/release.yml`](.github/workflows/release.yml) on
   GitHub-hosted runners from the tagged commit, with a signed
   [build provenance attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).
@@ -148,8 +183,10 @@ or quit LimitBar from its panel and delete `LimitBar` from Applications, `~/Appl
 ```bash
 scripts/build-app.sh build                  # → build/LimitBar.app (native arch)
 build/LimitBar.app/Contents/MacOS/LimitBar --probe   # what every CLI returns right now, as JSON
+build/LimitBar.app/Contents/MacOS/LimitBar --usage   # the Usage view's numbers, as JSON
 tests/states.sh build/LimitBar.app
 tests/sandbox.sh
+tests/usage.sh build/LimitBar.app
 tests/claude-canary.sh                      # needs Claude Code installed; makes no model call
 ```
 
