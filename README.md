@@ -23,11 +23,11 @@ Paste this into your AI agent (Claude Code, Codex, Gemini, Grok…):
 Or run it yourself in Terminal:
 
 ```bash
-d="$(mktemp -d)" && curl -fsSLo "$d/install.sh" https://raw.githubusercontent.com/dancik/limitbar/831be887b637875199b19e14a91b721b44048dd1/install.sh && bash "$d/install.sh"
+d="$(mktemp -d)" && curl -fsSLo "$d/install.sh" https://raw.githubusercontent.com/dancik/limitbar/7105981982e652368b15e01b777164c999e213dd/install.sh && bash "$d/install.sh"
 ```
 
 The link is pinned to one commit, so the script you run is exactly the one you can read
-[here](https://github.com/dancik/limitbar/blob/831be887b637875199b19e14a91b721b44048dd1/install.sh). It downloads the release
+[here](https://github.com/dancik/limitbar/blob/7105981982e652368b15e01b777164c999e213dd/install.sh). It downloads the release
 build, checks its SHA-256 against the digest written into that script, checks GitHub's build provenance
 when the [GitHub CLI](https://cli.github.com) is installed and signed in, and copies `LimitBar.app` to
 `/Applications`, where Spotlight and Launchpad find it. Any admin account can write there without a
@@ -161,7 +161,7 @@ How it protects you:
 - **Release builds** are made by [`.github/workflows/release.yml`](.github/workflows/release.yml) on
   GitHub-hosted runners from the tagged commit, with a signed
   [build provenance attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).
-  Check it yourself: `gh attestation verify LimitBar-1.0.3.zip --repo dancik/limitbar`.
+  Check it yourself: `gh attestation verify LimitBar-1.1.0.zip --repo dancik/limitbar`.
 
 The app is ad-hoc signed, not notarized (there is no paid Apple Developer ID behind it). Installed with
 the script, macOS opens it normally; a zip downloaded **in a browser** will be blocked by Gatekeeper —
@@ -172,7 +172,7 @@ Found a problem? See [SECURITY.md](SECURITY.md).
 ## Uninstall
 
 ```bash
-d="$(mktemp -d)" && curl -fsSLo "$d/install.sh" https://raw.githubusercontent.com/dancik/limitbar/831be887b637875199b19e14a91b721b44048dd1/install.sh && bash "$d/install.sh" --uninstall
+d="$(mktemp -d)" && curl -fsSLo "$d/install.sh" https://raw.githubusercontent.com/dancik/limitbar/7105981982e652368b15e01b777164c999e213dd/install.sh && bash "$d/install.sh" --uninstall
 ```
 
 or quit LimitBar from its panel and delete `LimitBar` from Applications, `~/Applications/LimitBar.app`
