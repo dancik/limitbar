@@ -468,6 +468,7 @@ private struct MeterRow: View {
                     .font(.system(size: style == .quiet ? 11 : 12, weight: style == .primary ? .semibold : .regular))
                     .foregroundStyle(style == .quiet ? .secondary : .primary)
                 Text(resetText(due)).font(.system(size: 11)).foregroundStyle(due ? .secondary : .tertiary)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)    // the reset time is never cut off
             }
             .frame(width: 118, alignment: .leading)
             if !due {

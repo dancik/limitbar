@@ -57,4 +57,31 @@ mkdir "$T/badinterp"; chmod 777 "$T/badinterp"; cp /bin/bash "$T/badinterp/bash"
 printf '#!%s/badinterp/bash\necho Not logged in\n' "$T" > "$T/codex-badinterp"; chmod 755 "$T/codex-badinterp"
 expect "claude=missing codex=untrusted gemini=missing grok=missing" \
   -claudePath /nonexistent/claude -codexPath "$T/codex-badinterp" -agyPath /nonexistent/agy -grokPath /nonexistent/grok
+
+# Gemini quota: the most-used Gemini group is the bar and always listed; Gemini groups at 0 % are left
+# out of the panel, and so are unused non-Gemini groups. On a tie, agy's own order stands.
+mkdir "$T/quota"
+cat > "$T/quota/agy" <<'S'
+#!/bin/bash
+r='"reset_time":"2030-01-07T10:00:00Z"'
+echo '{"command":{"data":{"groups":[
+ {"name":"Gemini Test Model","buckets":[{"remaining_fraction":0.9,"window":"week",'"$r"'}]},
+ {"name":"Gemini Models","buckets":[{"remaining_fraction":1,"window":"week",'"$r"'},{"remaining_fraction":1,"window":"5h",'"$r"'}]},
+ {"name":"Claude Models","buckets":[{"remaining_fraction":1,"window":"week",'"$r"'}]},
+ {"name":"GPT Models","buckets":[{"remaining_fraction":0.5,"window":"week",'"$r"'}]}]}}}'
+S
+cat > "$T/quota/agy-idle" <<'S'
+#!/bin/bash
+r='"reset_time":"2030-01-07T10:00:00Z"'
+echo '{"command":{"data":{"groups":[
+ {"name":"Gemini Test Model","buckets":[{"remaining_fraction":1,"window":"week",'"$r"'}]},
+ {"name":"Gemini Models","buckets":[{"remaining_fraction":1,"window":"week",'"$r"'}]}]}}}'
+S
+chmod 755 "$T/quota/agy" "$T/quota/agy-idle"
+windows() { "$BIN" --probe -claudePath /nonexistent/claude -codexPath /nonexistent/codex -grokPath /nonexistent/grok -agyPath "$1" \
+  | /usr/bin/python3 -c 'import json,sys; g=json.load(sys.stdin)["gemini"]; print(g["state"], "|", ", ".join("%s %s %d" % (w["label"], w["short"], round(w["used"])) for w in g["windows"]), "| bar:", g["bar"]["label"])'; }
+want="ok | Gemini Test Model w 10, GPT Models w 50 | bar: Gemini Test Model"
+got="$(windows "$T/quota/agy")"; [[ "$got" == "$want" ]] && echo "ok   $got" || { echo "FAIL got: $got"; echo "     want: $want"; exit 1; }
+want="ok | Gemini Test Model w 0 | bar: Gemini Test Model"
+got="$(windows "$T/quota/agy-idle")"; [[ "$got" == "$want" ]] && echo "ok   $got" || { echo "FAIL got: $got"; echo "     want: $want"; exit 1; }
 echo "PASS: states"

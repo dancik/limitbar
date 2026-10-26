@@ -130,7 +130,7 @@ enum Fetch {
     // MARK: Gemini — Antigravity CLI `agy -p /quota`: Google's own per-group buckets, zero tokens.
 
     /// The bar shows the most-used bucket across the Gemini model groups (the one that stops you first);
-    /// the panel lists every group. Non-Gemini groups (Claude/GPT inside Antigravity) only once used.
+    /// the panel lists that group always and every other one only once used (Claude/GPT inside Antigravity too).
     static func gemini() -> Snapshot {
         let (b, why) = binary(.gemini)
         guard let bin = b else { return why! }
@@ -156,8 +156,12 @@ enum Fetch {
             }
         }
         guard !gemini.isEmpty else { return .status(.gemini, .failed, "no Gemini quota in agy's answer") }
-        gemini.sort { ($0.used ?? 0) > ($1.used ?? 0) }
-        return Snapshot(vendor: .gemini, bar: gemini.first, windows: gemini + other, measuredAt: Date())
+        // Most used first; on a tie agy's own order stands (Swift's sort is not stable, so sort the indices).
+        gemini = gemini.indices.sorted { (gemini[$0].used ?? 0, -$0) > (gemini[$1].used ?? 0, -$1) }.map { gemini[$0] }
+        // A Gemini group nobody uses (0 %) is noise next to the one that binds: the panel lists the bar
+        // window always and every other one only once it has been used, like the non-Gemini groups.
+        let shown = [gemini[0]] + gemini.dropFirst().filter { ($0.used ?? 0) > 0 }
+        return Snapshot(vendor: .gemini, bar: gemini.first, windows: shown + other, measuredAt: Date())
     }
 
     // MARK: Codex — the CLI writes rate_limits into its own session logs for free; app-server when old.

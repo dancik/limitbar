@@ -8,6 +8,8 @@
   look at Usage, incrementally. Nothing of a conversation is kept; the README lists exactly which files
   are read and what the index stores.
 - `LimitBar --usage` prints the same numbers as JSON.
+- **Gemini limits:** a Gemini model group nobody uses (0 %) is no longer listed under the one that binds,
+  and a reset time is never cut off.
 
 ## 1.0.3
 
