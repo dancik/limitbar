@@ -1,0 +1,1 @@
+{"timestamp":"@TS@","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":17.0,"window_minutes":300,"resets_at":@RESET@},"secondary":{"used_percent":40.0,"window_minutes":10080,"resets_at":@RESET@},"plan_type":"plus"}}}

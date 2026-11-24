@@ -23,6 +23,7 @@ enum VendorState: String, Codable {
     case untrusted      // found, but owned by another account or group/world-writable: never run
     case signedOut      // the CLI says nobody is signed in
     case failed         // it ran and did not give limits (timeout, error, changed format)
+    case unsupported    // account found, but there is no way to read its limits (never queried)
 }
 
 /// One limit window as the vendor reports it. `used` is percent USED, 0–100.

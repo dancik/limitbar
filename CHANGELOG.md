@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0
+
+- **Several accounts.** A second Claude or Codex login gets its own entry in the menu bar and the panel.
+  Accounts come from `~/Library/Application Support/limitbar/extra-accounts.json` and, automatically, from the
+  provider instances of T3 Code (read-only). The same login behind two folders is shown once. All polling
+  rules apply per account. Details in the README.
+- **`accounts.json`** in `~/Library/Caches/limitbar` (percentages, reset times, plan, display name) for other
+  apps, and two distributed notifications: `io.github.dancik.limitbar.refresh` and `.quit`.
+- **No menu bar icon:** `defaults write io.github.dancik.limitbar showStatusItem -bool false`.
+- Codex accounts read their session logs first; a T3 Code account uses the latest log reading when LimitBar
+  cannot see its sign-in. If `agy` is missing, T3 Code's copy of the Antigravity program is used.
+- `LimitBar --probe --accounts`, `--list-accounts`, `--snapshot <png>`.
+
 ## 1.1.0
 
 - **Usage view.** A **Limits | Usage** switch at the top of the panel. Usage shows, per service, the

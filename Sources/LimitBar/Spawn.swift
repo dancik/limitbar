@@ -168,6 +168,13 @@ enum CLI {
         return .missing
     }
 
+    /// An executable given for one account (extra-accounts.json, or found in T3 Code's tools folder): the
+    /// same `trusted` check as for every other binary.
+    static func check(_ p: String) -> Found {
+        guard FileManager.default.isExecutableFile(atPath: p) else { return .missing }
+        return trusted(p) ? .ok(p) : .untrusted(p)
+    }
+
     /// Whether another local account could replace what we are about to run. The path, its resolved target
     /// and every directory above both, up to `/`, must be owned by this user or root, not writable by
     /// "others", writable by group only for `admin` (who can sudo anyway), and carry no ACL entry that
@@ -278,9 +285,12 @@ enum CLI {
 
     /// One JSON-RPC exchange over stdio: initialize, optional notification, one call; then kill.
     /// `argv` may wrap `binary` (e.g. in sandbox-exec); the environment is built for `binary`.
+    /// `then` is an optional second call made after the first one answered; its result is ignored when it
+    /// fails and delivered through `second` when it works (used for the account fingerprint).
     static func rpc(_ argv: [String], binary: String, initialize: [String: Any], notify: String? = nil,
                     method: String, params: [String: Any] = [:], timeout: TimeInterval = 20,
-                    extraEnv: [String: String] = [:]) -> RPCResult {
+                    extraEnv: [String: String] = [:], then: (String, [String: Any])? = nil,
+                    second: (([String: Any]) -> Void)? = nil) -> RPCResult {
         guard let c = Child(argv, env: env(for: binary).merging(extraEnv) { $1 }) else { return .failed("could not start") }
         defer { c.terminate() }
         let deadline = Date().addingTimeInterval(timeout)
@@ -306,6 +316,10 @@ enum CLI {
         send(["jsonrpc": "2.0", "id": 2, "method": method, "params": params])
         let r = reply(2)
         guard let result = r?["result"] as? [String: Any] else { return .failed(failure(r)) }
+        if let (m, p) = then {
+            send(["jsonrpc": "2.0", "id": 3, "method": m, "params": p])
+            if let r3 = reply(3)?["result"] as? [String: Any] { second?(r3) }
+        }
         return .ok(result)
     }
 }

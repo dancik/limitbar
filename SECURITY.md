@@ -11,6 +11,10 @@ In scope, for example:
 - running an executable it should have refused (see `CLI.trusted` in `Sources/LimitBar/Spawn.swift`);
 - escaping or weakening the CLI sandbox (`Resources/cli.sb`) that codex, agy and grok run in;
 - a `claude` invocation that loads user hooks, MCP servers or settings despite the isolation flags;
+- an account folder outside the rules in `Accounts.checkedDir` (`Sources/LimitBar/Accounts.swift`) reaching a CLI, or
+  widening the Codex sandbox's state folder;
+- reading anything from T3 Code's `settings.json` beyond the fields the README names, or any credential file;
+- anything identifying a person (e-mail, organisation, token) ending up in `accounts.json`, `state.json` or the panel;
 - the installer accepting a modified archive, or `--from-source` building a different commit.
 
 Not a vulnerability by itself: on an admin account the installer puts LimitBar into `/Applications`, which

@@ -6,8 +6,8 @@ import SwiftUI
 /// closes it after 250 ms; a click pins it open (click again, or click elsewhere, to close). One
 /// non-activating panel, so it never steals focus from the app you are in.
 final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: owns the tracking areas
-    private var item: NSStatusItem!
-    private var tray: PassThroughHostingView<TrayView>!
+    private var item: NSStatusItem?
+    private var tray: PassThroughHostingView<TrayView>?
     private var panel: NSPanel!
     private var panelHost: NSHostingView<AnyView>!
     private let store = Store()
@@ -21,29 +21,29 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
     private var usageTimer: Timer?
     private var overItem = false
     private var overPanel = false
+    private var lastRefreshMessage = Date.distantPast
+    private var prefTimer: Timer?
+
+    /// `defaults write io.github.dancik.limitbar showStatusItem -bool false`: no menu bar symbol, the app
+    /// keeps collecting and writing accounts.json. Default: shown.
+    private var wantsStatusItem: Bool {
+        (UserDefaults.standard.object(forKey: "showStatusItem") as? Bool) ?? true
+    }
 
     override init() { super.init() }
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        guard let button = item.button else { return }
-        tray = PassThroughHostingView(rootView: TrayView(store: store))
-        tray.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(tray)
-        NSLayoutConstraint.activate([tray.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                                     tray.centerYAnchor.constraint(equalTo: button.centerYAnchor)])
-        button.target = self
-        button.action = #selector(clicked)
-        button.setAccessibilityLabel("AI subscription limits")
-        button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                              owner: self, userInfo: ["zone": "item"]))
-        resizeItem()
+        buildPanel()
         store.$snaps.receive(on: RunLoop.main).sink { [weak self] _ in
             DispatchQueue.main.async { self?.resizeItem(); self?.resizePanel() }
         }.store(in: &subs)
         store.$busy.receive(on: RunLoop.main).sink { [weak self] _ in
             DispatchQueue.main.async { self?.resizePanel() }
+        }.store(in: &subs)
+        // Accounts can appear or vanish (T3 Code's settings), which changes what the tray shows.
+        store.$accounts.receive(on: RunLoop.main).sink { [weak self] _ in
+            DispatchQueue.main.async { self?.resizeItem(); self?.resizePanel() }
         }.store(in: &subs)
         // The Usage page changes the panel's height: on every switch and whenever new totals arrive. Each
         // change measures the natural height again (scrolling off) before deciding whether it must scroll.
@@ -59,10 +59,60 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
             guard let self = self, self.panel?.isVisible == true else { return }
             if page == .usage { self.usage.refresh() } else { self.usage.pause() }
         }.store(in: &subs)
-        buildPanel()
+        applyStatusItemPreference()
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.applyStatusItemPreference()
+        }
+        prefTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.applyStatusItemPreference() }
+
+        // Messages from Cockpit (no data travels with them): `refresh` freshens accounts older than 90 s,
+        // at most once every 5 s; `quit` ends the app (there may be no symbol to quit it from).
+        let dn = DistributedNotificationCenter.default()
+        dn.addObserver(forName: Notification.Name("io.github.dancik.limitbar.refresh"), object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, Date().timeIntervalSince(self.lastRefreshMessage) > 5 else { return }
+            self.lastRefreshMessage = Date()
+            self.store.refresh(olderThan: 90)
+        }
+        dn.addObserver(forName: Notification.Name("io.github.dancik.limitbar.quit"), object: nil, queue: .main) { _ in
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func applyStatusItemPreference() {
+        if wantsStatusItem == (item != nil) { return }
+        if wantsStatusItem { createItem() } else { removeItem() }
+    }
+
+    private func createItem() {
+        let it = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        guard let button = it.button else { NSStatusBar.system.removeStatusItem(it); return }
+        item = it
+        let t = PassThroughHostingView(rootView: TrayView(store: store))
+        tray = t
+        t.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(t)
+        NSLayoutConstraint.activate([t.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                                     t.centerYAnchor.constraint(equalTo: button.centerYAnchor)])
+        button.target = self
+        button.action = #selector(clicked)
+        button.setAccessibilityLabel("AI subscription limits")
+        button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                              owner: self, userInfo: ["zone": "item"]))
+        resizeItem()
+    }
+
+    private func removeItem() {
+        pinned = false
+        showTimer?.invalidate(); hideTimer?.invalidate()
+        overItem = false; overPanel = false
+        panel.orderOut(nil)
+        if let m = outsideClick { NSEvent.removeMonitor(m); outsideClick = nil }
+        if let it = item { NSStatusBar.system.removeStatusItem(it) }
+        item = nil; tray = nil
     }
 
     private func resizeItem() {
+        guard let tray = tray, let item = item else { return }
         tray.layoutSubtreeIfNeeded()
         item.length = ceil(tray.fittingSize.width)
         item.button?.toolTip = nil
@@ -108,7 +158,7 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         guard panel != nil else { return }
         panelHost.layoutSubtreeIfNeeded()
         let size = panelHost.fittingSize
-        guard size.height > 0, let button = item.button, let win = button.window else { return }
+        guard size.height > 0, let button = item?.button, let win = button.window else { return }
         let r = win.convertToScreen(button.convert(button.bounds, to: nil))
         guard let screen = (win.screen ?? NSScreen.main)?.visibleFrame else { return }   // no display attached
         // Taller than the screen (many models on Usage): the middle scrolls instead. The natural height is
@@ -124,7 +174,7 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
     }
 
     private func show() {
-        guard !panel.isVisible else { return }
+        guard item != nil, !panel.isVisible else { return }
         store.refresh(olderThan: 90)      // hover refresh: only sources older than 90 s
         if ui.page == .usage { usage.refresh() }   // logs are read only for someone looking at them
         usageTimer?.invalidate()
@@ -134,13 +184,13 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         }
         resizePanel()
         panel.orderFrontRegardless()
-        item.button?.highlight(true)
+        item?.button?.highlight(true)
     }
 
     private func hide() {
         guard !pinned else { return }
         panel.orderOut(nil)
-        item.button?.highlight(false)
+        item?.button?.highlight(false)
         usageTimer?.invalidate(); usageTimer = nil
         usage.pause()
         if let m = outsideClick { NSEvent.removeMonitor(m); outsideClick = nil }
@@ -154,7 +204,7 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {   // NSResponder: 
         } else {
             pinned = true
             show()
-            item.button?.highlight(true)
+            item?.button?.highlight(true)
             outsideClick = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 guard let self = self else { return }
                 self.pinned = false

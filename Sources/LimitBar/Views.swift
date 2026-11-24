@@ -40,13 +40,17 @@ struct TrayView: View {
     @ObservedObject var store: Store
 
     var body: some View {
+        let rows = store.bar
+        let tags = Accounts.shortTags(rows.map { ($0.account, $0.name) })     // only where one vendor has several accounts
         HStack(spacing: 8) {
-            ForEach(store.installed, id: \.self) { v in
-                let s = store.snaps[v]
+            ForEach(rows) { row in
                 HStack(spacing: 3) {
-                    Image(nsImage: Marks.image(v)).renderingMode(.template).resizable()
+                    Image(nsImage: Marks.image(row.account.vendor)).renderingMode(.template).resizable()
                         .interpolation(.high).frame(width: 13, height: 13)
-                    digit(s)
+                    if let t = tags[row.account.id] {
+                        Text(t).font(.system(size: 9.5, weight: .medium)).foregroundStyle(.secondary).fixedSize()
+                    }
+                    digit(row.snap)
                 }
             }
         }
@@ -130,13 +134,14 @@ struct PanelView: View {
 
     @ViewBuilder private var limits: some View {
         Hairline()
-        ForEach(Array(store.installed.enumerated()), id: \.element) { i, v in
+        let rows = store.shown
+        ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
             if i > 0 { Hairline() }
-            VendorSection(vendor: v, snap: store.snaps[v], busy: store.busy.contains(v))
+            VendorSection(row: row, busy: store.busy.contains(row.account.id))
         }
-        let missing = Vendor.allCases.filter { !store.installed.contains($0) }
+        let missing = store.missingVendors
         if !missing.isEmpty {
-            if !store.installed.isEmpty { Hairline() }
+            if !rows.isEmpty { Hairline() }
             MissingRow(vendors: missing)
         }
     }
@@ -221,7 +226,7 @@ private struct UsagePage: View {
             .padding(EdgeInsets(top: 7, leading: 12, bottom: 5, trailing: 12))
             ForEach(store.installed, id: \.self) { v in
                 Hairline()
-                UsageSection(vendor: v, plan: store.snaps[v]?.plan ?? "", usage: usage.summary?.vendors[v],
+                UsageSection(vendor: v, plan: store.plan(for: v), usage: usage.summary?.vendors[v],
                              window: window, shown: shown, week: ui.range == .week, reading: usage.reading)
             }
             if store.installed.isEmpty {
@@ -387,16 +392,17 @@ private struct FooterButton: View {
 }
 
 private struct VendorSection: View {
-    let vendor: Vendor
-    let snap: Snapshot?
+    let row: Store.Row
     let busy: Bool
+    private var vendor: Vendor { row.account.vendor }
+    private var snap: Snapshot? { row.snap }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 8) {
                 VendorMark(vendor: vendor).frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(vendor.name).font(.system(size: 13, weight: .semibold)).tracking(-0.2)
+                    Text(row.name).font(.system(size: 13, weight: .semibold)).tracking(-0.2)
                     Text(planLine).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
@@ -410,9 +416,9 @@ private struct VendorSection: View {
                     .opacity(isStale(snap) ? 0.48 : 1)
             }
             if snap?.state == .signedOut {
-                Text("Signed out — \(vendor.loginHint)").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Signed out — \(loginHint)").font(.system(size: 12)).foregroundStyle(.secondary)
                     .textSelection(.enabled).padding(.top, 7)
-            } else if windows.isEmpty {
+            } else if windows.isEmpty && snap?.state != .unsupported {
                 Text(busy ? "Reading…" : "—").font(.system(size: 12)).foregroundStyle(.secondary).padding(.top, 7)
             }
             ForEach(snap?.notes ?? [], id: \.self) { n in
@@ -423,6 +429,18 @@ private struct VendorSection: View {
             }
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 9, trailing: 12))
+    }
+
+    /// For an account with its own folder the hint says which folder to sign in to.
+    private var loginHint: String {
+        if row.account.source == .t3code { return "sign in through T3 Code" }
+        guard let d = row.account.configDir else { return vendor.loginHint }
+        let shown = d.hasPrefix(CLI.home + "/") ? "~" + d.dropFirst(CLI.home.count) : d
+        switch vendor {
+        case .claude: return "run `CLAUDE_CONFIG_DIR=\(shown) claude`, then /login"
+        case .codex: return "run `CODEX_HOME=\(shown) codex login`"
+        default: return vendor.loginHint
+        }
     }
 
     private var planLine: String {

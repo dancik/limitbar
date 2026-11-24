@@ -1,0 +1,18 @@
+{
+  "theme": "dark",
+  "providerInstances": {
+    "claudeAgent": { "driver": "claudeAgent", "displayName": "Claude Home", "config": { "homePath": "~/.claude" } },
+    "claudeAgent_work": { "driver": "claudeAgent", "displayName": "Claude Work", "enabled": true,
+                          "config": { "homePath": "~/.claude-work", "autoCompactWindow": "300000" } },
+    "claudeAgent_work2": { "driver": "claudeAgent", "displayName": "Claude Work",
+                           "config": { "homePath": "~/.claude-work2", "apiKey": "not-a-real-secret" } },
+    "claudeAgent_off": { "driver": "claudeAgent", "displayName": "Claude Off", "enabled": false,
+                         "config": { "homePath": "~/.claude-off" } },
+    "claudeAgent_nofolder": { "driver": "claudeAgent", "displayName": "Claude Nofolder" },
+    "codex": { "driver": "codex", "enabled": false },
+    "codex_abc": { "driver": "codex", "displayName": "Codex Work", "enabled": true, "config": { "setupMode": "managed" } },
+    "codex_own": { "driver": "codex", "displayName": "Codex Own", "config": { "homePath": "~/.codex-own" } },
+    "antigravity": { "driver": "antigravity", "displayName": "Antigravity", "enabled": true },
+    "acpRegistry_gemini_cli": { "driver": "acpRegistry", "displayName": "Gemini CLI", "enabled": false }
+  }
+}

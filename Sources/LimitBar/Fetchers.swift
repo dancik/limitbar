@@ -30,15 +30,89 @@ enum Fetch {
                 return (nil, .status(v, .untrusted, "\(v.cli)'s interpreter could be replaced by another account — not run"))
             }
             return (p, nil)
-        case .missing: return (nil, .status(v, .missing))
+        case .missing:
+            // Last resort for Antigravity: the same program ships with T3 Code. Once signed in at the standard
+            // place with it (see Accounts.t3AntigravityBinary), `/quota` works like with `agy`.
+            if v == .gemini, UserDefaults.standard.string(forKey: "agyPath") == nil,
+               let t3 = Accounts.t3AntigravityBinary(Accounts.t3Root), case .ok(let p) = CLI.check(t3), CLI.launch(p) != nil {
+                return (p, nil)
+            }
+            return (nil, .status(v, .missing))
         case .untrusted: return (nil, .status(v, .untrusted, "\(v.cli) could be replaced by another account — not run"))
         }
+    }
+
+    /// The CLI for one account: its own executable when it has one (extra-accounts.json, T3 Code), else the
+    /// vendor's CLI from the fixed search path. Same checks either way.
+    static func binary(_ a: Account) -> (String?, Snapshot?) {
+        guard let b = a.binary else { return binary(a.vendor) }
+        switch CLI.check(b) {
+        case .ok(let p):
+            guard CLI.launch(p) != nil else {
+                return (nil, .status(a.vendor, .untrusted, "\(a.vendor.cli)'s interpreter could be replaced by another account — not run"))
+            }
+            return (p, nil)
+        case .missing: return (nil, .status(a.vendor, .missing))
+        case .untrusted: return (nil, .status(a.vendor, .untrusted, "\(a.vendor.cli) could be replaced by another account — not run"))
+        }
+    }
+
+    /// Environment additions that point a CLI at an account's folder; nil when that folder is not accepted.
+    static func accountEnv(_ a: Account) -> (env: [String: String], dir: String?)? {
+        guard let d = a.configDir else { return ([:], nil) }
+        guard let ok = Accounts.checkedDir(d) else { return nil }
+        return ([a.vendor == .claude ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME": ok], ok)
     }
 
     static func signedOutText(_ s: String) -> Bool {
         let t = s.lowercased()
         return ["not logged in", "not signed in", "please log in", "please sign in", "login required",
                 "unauthenticated", "unauthorized", "no credentials", "not authenticated", "authentication required"].contains { t.contains($0) }
+    }
+
+    /// One unconditional reading of one account, for `--probe`: the snapshot and the account fingerprint.
+    static func probe(_ a: Account) -> (Snapshot, fingerprint: String?) {
+        if let why = a.unsupported { return (.status(a.vendor, .unsupported, why), nil) }
+        switch a.vendor {
+        case .claude:
+            let (bin, why) = binary(a)
+            if bin == nil { return (why!, nil) }
+            if let d = a.configDir, !FileManager.default.fileExists(atPath: d) { return (.status(.claude, .missing, "account folder not found"), nil) }
+            let acct = claudeAccount(a)
+            if let acct = acct, !acct.signedIn { return (.status(.claude, .signedOut), nil) }
+            var s = (a.isStandard ? claudeFile() : nil) ?? claudeUsage(a)
+            s.plan = acct?.plan ?? s.plan
+            return (s, acct?.fingerprint)
+        case .gemini: return (gemini(), nil)
+        case .codex:
+            let logs = codexLogsRoot(a).flatMap { codexFromLogs(root: $0, days: a.source == .t3code ? 30 : 2) }
+            let t3 = a.source == .t3code
+            if binary(a).0 == nil {
+                if let s = fromSessionLog(logs, anyAge: t3) { return (s, nil) }
+                return (t3 ? noReadingYet : binary(a).1!, nil)
+            }
+            let r = codexFromServer(a)
+            if r.0.state == .ok { return r }
+            return (fromSessionLog(logs, anyAge: t3) ?? (t3 ? noReadingYet : r.0), r.1)
+        case .grok: return (grok(), nil)
+        }
+    }
+
+    /// A Codex account's session logs (`rate_limits` lines, no credentials), only when the folder passes the
+    /// same check as every account folder; a symlink such as T3 Code's `sessions` is resolved first.
+    static func codexLogsRoot(_ a: Account) -> String? {
+        Accounts.checkedDir("\(a.configDir ?? Accounts.standardDir(.codex)!)/sessions")
+    }
+
+    static let noReadingYet = Snapshot.status(.codex, .failed, "no reading yet — use ChatGPT in T3 Code once")
+
+    /// A reading from the session log counts as `ok` while it is fresh (45 min), flagged with a note.
+    /// `anyAge`: T3 Code accounts, whose sign-in LimitBar cannot see — an old reading is still the best one
+    /// (the panel dims it, and shows "—" once its window has reset).
+    static func fromSessionLog(_ logs: Snapshot?, anyAge: Bool = false) -> Snapshot? {
+        guard var s = logs, !s.windows.isEmpty, let m = s.measuredAt, anyAge || Date().timeIntervalSince(m) < 45 * 60 else { return nil }
+        s.notes = ["from session log"]
+        return s
     }
 
     // MARK: Claude — the statusline file (free) first; `claude -p /usage` only when it is stale.
@@ -66,11 +140,12 @@ enum Fetch {
                                   "--settings", #"{"disableAllHooks":true,"language":"English"}"#]
 
     /// `claude -p "/usage"` — no model call, but a full CLI start (~3 s CPU). Called at most every 20 min.
-    static func claudeUsage() -> Snapshot {
-        let (b, why) = binary(.claude)
+    static func claudeUsage(_ a: Account = Accounts.standardAccount(.claude)) -> Snapshot {
+        let (b, why) = binary(a)
         guard let bin = b else { return why! }
+        guard let ae = accountEnv(a) else { return .status(.claude, .failed, "account folder not accepted") }
         guard let out = CLI.run(bin, ["-p", "/usage", "--output-format", "json", "--max-turns", "1"] + claudeIsolation,
-                                timeout: 40) else { return .status(.claude, .failed, "claude timed out") }
+                                timeout: 40, extraEnv: ae.env) else { return .status(.claude, .failed, "claude timed out") }
         guard let o = json(out.data), let text = o["result"] as? String else {
             let raw = String(decoding: out.data.prefix(2000), as: UTF8.self)
             return .status(.claude, signedOutText(raw) ? .signedOut : .failed, signedOutText(raw) ? nil : "claude gave no usage (exit \(out.code))")
@@ -120,11 +195,15 @@ enum Fetch {
 
     /// `claude auth status --json`: whether someone is signed in, and the plan ("Max", "Pro").
     /// Its answer also carries the email and organisation; those are never kept or shown.
-    static func claudeAccount() -> (signedIn: Bool, plan: String)? {
-        guard case .ok(let bin) = CLI.find("claude"),
-              let out = CLI.run(bin, ["auth", "status", "--json"], timeout: 20), let o = json(out.data) else { return nil }
+    /// `fingerprint` is a SHA-256 over account and organisation id, for recognising the same account behind
+    /// two folders; it is computed here, lives in memory only and is never written or shown.
+    static func claudeAccount(_ a: Account = Accounts.standardAccount(.claude)) -> (signedIn: Bool, plan: String, fingerprint: String?)? {
+        guard let bin = binary(a).0, let ae = accountEnv(a),
+              let out = CLI.run(bin, ["auth", "status", "--json"], timeout: 20, extraEnv: ae.env), let o = json(out.data) else { return nil }
         let plan = (o["subscriptionType"] as? String).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""
-        return ((o["loggedIn"] as? Bool) == true, plan)
+        let signedIn = (o["loggedIn"] as? Bool) == true
+        let fp = signedIn ? Accounts.fingerprint(["claude", o["email"] as? String, o["orgId"] as? String]) : nil
+        return (signedIn, plan, fp)
     }
 
     // MARK: Gemini — Antigravity CLI `agy -p /quota`: Google's own per-group buckets, zero tokens.
@@ -166,12 +245,11 @@ enum Fetch {
 
     // MARK: Codex — the CLI writes rate_limits into its own session logs for free; app-server when old.
 
-    static func codexFromLogs() -> Snapshot? {
+    static func codexFromLogs(root: String = "\(home)/.codex/sessions", days: Int = 2) -> Snapshot? {
         let fm = FileManager.default
-        let root = "\(home)/.codex/sessions"
         let cal = Calendar.current
         var files: [(String, Date)] = []
-        for back in 0..<2 {      // today and yesterday are enough: the 5-hour window is all we need fresh
+        for back in 0..<days {      // today and yesterday are enough: the 5-hour window is all we need fresh
             let d = cal.date(byAdding: .day, value: -back, to: Date())!
             let dir = String(format: "%@/%04d/%02d/%02d", root, cal.component(.year, from: d), cal.component(.month, from: d), cal.component(.day, from: d))
             for f in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where f.hasSuffix(".jsonl") {
@@ -191,21 +269,30 @@ enum Fetch {
         return nil
     }
 
-    static func codexFromServer() -> Snapshot {
-        let (b, why) = binary(.codex)
-        guard let bin = b else { return why! }
-        guard let box = Sandbox.wrap(.codex, bin, ["app-server"]) else {
-            return .status(.codex, .failed, "sandbox unavailable — codex not run")
+    /// Returns the snapshot and the account fingerprint (SHA-256 over account type, e-mail and plan from
+    /// `account/read`; in memory only, never written or shown).
+    static func codexFromServer(_ a: Account = Accounts.standardAccount(.codex)) -> (Snapshot, fingerprint: String?) {
+        let (b, why) = binary(a)
+        guard let bin = b else { return (why!, nil) }
+        guard let ae = accountEnv(a) else { return (.status(.codex, .failed, "account folder not accepted"), nil) }
+        guard let box = Sandbox.wrap(.codex, bin, ["app-server"], state: ae.dir, env: ae.env) else {
+            return (.status(.codex, .failed, "sandbox unavailable — codex not run"), nil)
         }
+        var fp: String?
         switch CLI.rpc(box.argv, binary: box.binary, initialize: ["clientInfo": ["name": "limitbar", "version": "1"]],
-                       notify: "initialized", method: "account/rateLimits/read", extraEnv: box.env) {
+                       notify: "initialized", method: "account/rateLimits/read", extraEnv: box.env,
+                       then: ("account/read", ["refreshToken": false]),
+                       second: { r in
+                           let acc = r["account"] as? [String: Any]
+                           fp = Accounts.fingerprint(["codex", acc?["type"] as? String, acc?["email"] as? String, acc?["planType"] as? String])
+                       }) {
         case .failed(let e):
-            if let lbox = Sandbox.wrap(.codex, bin, ["login", "status"]),
+            if let lbox = Sandbox.wrap(.codex, bin, ["login", "status"], state: ae.dir, env: ae.env),
                let out = CLI.run(lbox.argv[0], Array(lbox.argv.dropFirst()), timeout: 15, extraEnv: lbox.env, envFor: lbox.binary),
-               signedOutText(String(decoding: out.data, as: UTF8.self)) { return .status(.codex, .signedOut) }
-            return .status(.codex, signedOutText(e) ? .signedOut : .failed, signedOutText(e) ? nil : "codex gave no limits")
+               signedOutText(String(decoding: out.data, as: UTF8.self)) { return (.status(.codex, .signedOut), nil) }
+            return (.status(.codex, signedOutText(e) ? .signedOut : .failed, signedOutText(e) ? nil : "codex gave no limits"), nil)
         case .ok(let r):
-            guard let rl = r["rateLimits"] as? [String: Any] else { return .status(.codex, .failed, "codex gave no limits") }
+            guard let rl = r["rateLimits"] as? [String: Any] else { return (.status(.codex, .failed, "codex gave no limits"), nil) }
             var s = codexSnapshot(rl, used: "usedPercent", reset: "resetsAt", measured: Date())
             let credits = ((r["rateLimitResetCredits"] as? [String: Any])?["credits"] as? [[String: Any]] ?? [])
                 .filter { ($0["status"] as? String) == "available" }
@@ -213,7 +300,7 @@ enum Fetch {
             if let next = credits.first {
                 s.notes.append("\(credits.count) free full reset\(credits.count == 1 ? "" : "s") · next expires \(relativeDay(next))")
             }
-            return s
+            return (s, fp)
         }
     }
 
@@ -296,7 +383,10 @@ enum Sandbox {
     }
 
     /// nil when the profile or sandbox-exec is missing — then the CLI is not run at all.
-    static func wrap(_ v: Vendor, _ link: String, _ args: [String]) -> Box? {
+    /// `state` replaces the CLI's standard state folder (an account's CODEX_HOME, already checked by
+    /// `Accounts.checkedDir`); `env` is added to the CLI's environment (CODEX_HOME).
+    static func wrap(_ v: Vendor, _ link: String, _ args: [String], state custom: String? = nil,
+                     env extra: [String: String] = [:]) -> Box? {
         guard let profile = Bundle.main.url(forResource: "cli", withExtension: "sb")?.path,
               FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec"),
               let bin = real(link), let tmp = real(CLI.workDir), let home = real(CLI.home) else { return nil }
@@ -308,11 +398,14 @@ enum Sandbox {
             // Homebrew: <Caskroom>/codex/<version>/bin/codex → the version folder. npm: <node_modules>/@openai/codex/
             // bin/codex.js starts a native binary from the sibling package @openai/codex-<platform> → the whole
             // @openai scope folder.
-            state = "\(home)/.codex"
+            state = custom.flatMap(real) ?? "\(home)/.codex"
             let pkg = (dir as NSString).deletingLastPathComponent
             let parent = (pkg as NSString).deletingLastPathComponent
             execDir = (parent as NSString).lastPathComponent.hasPrefix("@") ? parent : pkg
-        case .gemini: state = "\(home)/.gemini"; execDir = "\(home)/.gemini/antigravity-cli/bin"
+        case .gemini:
+            state = "\(home)/.gemini"
+            // agy's own folder; or, for T3 Code's copy of the program, the folder it sits in
+            execDir = bin.hasPrefix("\(home)/.gemini/") ? "\(home)/.gemini/antigravity-cli/bin" : dir
         case .claude: return nil
         }
         // A script CLI (npm's `#!/usr/bin/env node`) is started through its checked interpreter, explicitly.
@@ -327,6 +420,6 @@ enum Sandbox {
                     "-D", "KEYCHAINS=\(agy ? "\(home)/Library/Keychains" : none)",
                     "-D", "SHAREDTMP=\(agy ? "/private/tmp" : none)",
                     ] + start + args
-        return Box(argv: argv, binary: bin, env: ["TMPDIR": tmp + "/"])
+        return Box(argv: argv, binary: bin, env: ["TMPDIR": tmp + "/"].merging(extra) { $1 })
     }
 }
